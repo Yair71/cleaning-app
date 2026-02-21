@@ -4,24 +4,23 @@ import plotly.express as px
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
-
+import json
 # --- НАСТРОЙКИ UI ---
 st.set_page_config(page_title="Cleaning OS Cloud", page_icon="✨", layout="centered", initial_sidebar_state="collapsed")
 
 # --- ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS ---
 def get_gsheet():
     try:
-        # Тянем данные из Secrets
-        creds_dict = st.secrets["gcp_service_account"]
+        # Теперь мы читаем чистый JSON, это работает всегда!
+        creds_dict = json.loads(st.secrets["google_json"])
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
-        
-        # Открываем таблицу по ID
         sheet = client.open_by_key(st.secrets["spreadsheet"]["id"])
         return sheet
     except Exception as e:
-        st.error(f"Ошибка авторизации Google: {e}")
+        # Теперь ошибка покажет точную причину
+        st.error(f"Детали ошибки: {repr(e)}")
         return None
 
 # --- ЗАГРУЗКА ДАННЫХ ---
