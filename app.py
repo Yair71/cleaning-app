@@ -8,19 +8,22 @@ import json
 # --- НАСТРОЙКИ UI ---
 st.set_page_config(page_title="Cleaning OS Cloud", page_icon="✨", layout="centered", initial_sidebar_state="collapsed")
 
-# --- ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS ---
+
+# --- ФУНКЦИЯ ПОДКЛЮЧЕНИЯ (ДЕТЕКТОР ОШИБОК) ---
 def get_gsheet():
     try:
-        # Теперь мы читаем чистый JSON, это работает всегда!
         creds_dict = json.loads(st.secrets["google_json"])
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(st.secrets["spreadsheet"]["id"])
         return sheet
+    except gspread.exceptions.APIError as e:
+        # Это вытащит точный ответ от Google!
+        st.error(f"❌ Google API сказал: {e.response.text}")
+        return None
     except Exception as e:
-        # Теперь ошибка покажет точную причину
-        st.error(f"Детали ошибки: {repr(e)}")
+        st.error(f"❌ Системная ошибка: {repr(e)}")
         return None
 
 # --- ЗАГРУЗКА ДАННЫХ ---
