@@ -126,12 +126,12 @@ elif page == "🧮 Калькулятор цен":
     with st.container(border=True):
         st.subheader("Оценка стоимости")
         calc_sqm = st.number_input("Площадь (м²)", 0, 500, 100)
-        calc_type = st.radio("Тип уборки", ["Light (11 ₪/м²)", "Deep (16 ₪/м²)", "Post-Reno (20 ₪/м²)"])
+        calc_type = st.radio("Тип уборки", ["Light (17 ₪/м²)", "Deep (24 ₪/м²)", "Post-Reno (30 ₪/м²)"])
         
-        rate = 11 if "Light" in calc_type else 16 if "Deep" in calc_type else 20
+        rate = 17 if "Light" in calc_type else 24 if "Deep" in calc_type else 30
         base_price = calc_sqm * rate
         
-        big_fee = 150 if calc_sqm >= 130 else 0
+        big_fee = 200 if calc_sqm >= 140 else 0
         if big_fee > 0:
             st.warning(f"Надбавка за большую площадь: +{big_fee}₪")
             
