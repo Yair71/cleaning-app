@@ -5,11 +5,12 @@ from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 import json
+import traceback
+
 # --- НАСТРОЙКИ UI ---
-st.set_page_config(page_title="Cleaning OS Cloud", page_icon="✨", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Cleaning OS Premium", page_icon="💎", layout="centered", initial_sidebar_state="collapsed")
 
-
-# --- ФУНКЦИЯ ПОДКЛЮЧЕНИЯ (ДЕТЕКТОР ОШИБОК) ---
+# --- ПОДКЛЮЧЕНИЕ ---
 def get_gsheet():
     try:
         creds_dict = json.loads(st.secrets["google_json"])
@@ -18,12 +19,9 @@ def get_gsheet():
         client = gspread.authorize(creds)
         sheet = client.open_by_key(st.secrets["spreadsheet"]["id"])
         return sheet
-    except gspread.exceptions.APIError as e:
-        # Это вытащит точный ответ от Google!
-        st.error(f"❌ Google API сказал: {e.response.text}")
-        return None
     except Exception as e:
-        st.error(f"❌ Системная ошибка: {repr(e)}")
+        st.error("❌ Ошибка при подключении к Google:")
+        st.code(traceback.format_exc())
         return None
 
 # --- ЗАГРУЗКА ДАННЫХ ---
@@ -39,27 +37,26 @@ def load_data():
             
             return df_cash, df_jobs, cash_ws, jobs_ws
         except Exception as e:
-            st.error(f"Не найдены листы 'Cashflow' или 'Jobs'. Проверь названия в Google Таблице. Ошибка: {e}")
-            return pd.DataFrame(), pd.DataFrame(), None, None
+            st.error("❌ Ошибка при чтении листов. Проверь, что в Google Таблице есть листы 'Cashflow' и 'Jobs'.")
+            st.code(traceback.format_exc())
     return pd.DataFrame(), pd.DataFrame(), None, None
 
-# Инициализация данных
 df_cash, df_jobs, cash_ws, jobs_ws = load_data()
 
 # --- БОКОВОЕ МЕНЮ ---
-st.sidebar.title("Cleaning OS 🛠️")
+st.sidebar.title("Cleaning OS 💎")
 page = st.sidebar.radio("Навигация:", [
-    "💸 Касса (Ввод данных)", 
-    "📊 Аналитика бизнеса", 
-    "🧮 Калькулятор цен",
+    "💸 Касса (Операции)", 
+    "📈 Dashboard (P&L и KPI)", 
+    "🧮 Smart Калькулятор",
     "📋 База заказов"
 ])
 
 # ================= СТРАНИЦА 1: КАССА =================
-if page == "💸 Касса (Ввод данных)":
+if page == "💸 Касса (Операции)":
     st.title("💸 Касса")
     
-    action = st.radio("Что делаем?", ["✅ Закрыть заказ (Доход)", "🛒 Записать расход"], horizontal=True)
+    action = st.radio("Тип операции:", ["✅ Закрыть заказ (Доход)", "🛒 Записать расход"], horizontal=True)
     
     if action == "✅ Закрыть заказ (Доход)":
         if jobs_ws is None:
@@ -68,31 +65,27 @@ if page == "💸 Касса (Ввод данных)":
             with st.container(border=True):
                 st.subheader("1. Детали объекта")
                 job_date = st.date_input("Дата заказа", datetime.today())
-                job_property = st.selectbox("Тип объекта", ["Квартира (Apartment)", "Вилла (Villa)", "Только Handyman"])
+                job_property = st.selectbox("Категория (Line of Business)", ["Apartments", "Villas", "Handyman / Construction"])
                 job_sqm = st.number_input("Площадь (м²)", min_value=0, step=10, value=100)
-                
-                st.markdown("Уровень сложности:")
-                job_type = st.radio("Уровень сложности", ["Light", "Deep", "Post-Reno"], horizontal=True, label_visibility="collapsed")
+                job_type = st.radio("Пакет (Сложность)", ["Light (Basic)", "Deep", "Post-Reno / Move-In"], horizontal=True)
                 
             with st.container(border=True):
-                st.subheader("2. Финансы и Клиент")
-                job_revenue = st.number_input("Итоговый чек (₪)", min_value=0.0, step=50.0, value=1000.0)
-                job_handyman = st.toggle("🔧 Был апсейл Handyman?")
-                job_rating = st.slider("Оценка клиента", 1, 5, 5)
-                job_note = st.text_input("Имя клиента / Адрес")
+                st.subheader("2. Финансы и KPI")
+                job_revenue = st.number_input("Итоговая выручка (₪)", min_value=0.0, step=50.0, value=1000.0)
+                job_handyman = st.toggle("🔧 Был ли апсейл Handyman (доп. услуги)?")
+                job_rating = st.slider("Оценка клиента (для KPI)", 1, 5, 5)
+                job_note = st.text_input("Клиент / Комментарий")
 
             if st.button("🚀 Сохранить заказ в Облако", type="primary", use_container_width=True):
-                # Добавляем в лист Jobs
                 jobs_ws.append_row([
                     job_date.strftime("%Y-%m-%d"), job_property, job_sqm, 
                     job_type, job_handyman, job_revenue, job_rating
                 ])
-                # Добавляем в лист Cashflow как доход
                 cash_ws.append_row([
-                    job_date.strftime("%Y-%m-%d"), "Income", f"Revenue - {job_property}", 
+                    job_date.strftime("%Y-%m-%d"), "Income", f"{job_property} revenue", 
                     job_revenue, job_note
                 ])
-                st.toast("✅ Сохранено в Google Sheets!")
+                st.toast("✅ Заказ проведен! Данные в Google Sheets.")
                 st.rerun()
             
     elif action == "🛒 Записать расход":
@@ -100,76 +93,127 @@ if page == "💸 Касса (Ввод данных)":
             st.warning("Нет связи с таблицей")
         else:
             with st.container(border=True):
-                st.subheader("Новая покупка")
+                st.subheader("Новый расход")
                 exp_date = st.date_input("Дата", datetime.today())
-                exp_amount = st.number_input("Сумма покупки (₪)", min_value=0.0, step=50.0)
-                exp_category = st.selectbox("Категория расходов", [
-                    "Химия и расходники", "Бензин / Парковка", "Оборудование", 
-                    "Ремонт авто/техники", "Реклама", "Зарплата", "Прочее"
-                ])
-                exp_note = st.text_input("Что именно купили?")
+                exp_amount = st.number_input("Сумма (₪)", min_value=0.0, step=50.0)
                 
-                if st.button("💾 Записать расход", type="primary", use_container_width=True):
+                # Полный список расходов из бизнес-модели
+                exp_category = st.selectbox("Статья расходов", [
+                    "Cleaning chemicals & consumables", 
+                    "Travel / fuel / parking", 
+                    "Equipment & tools (buy/rent)", 
+                    "Repairs & maintenance", 
+                    "Marketing / ads", 
+                    "Insurance", 
+                    "Accountant / bookkeeping", 
+                    "Phones / software", 
+                    "Payroll: Cleaning workers",
+                    "Payroll: Handyman / construction",
+                    "Payroll: Director salary",
+                    "Other expenses"
+                ])
+                exp_note = st.text_input("Детали (что именно?)")
+                
+                if st.button("💾 Провести расход", type="primary", use_container_width=True):
                     cash_ws.append_row([
                         exp_date.strftime("%Y-%m-%d"), "Expense", exp_category, 
                         exp_amount, exp_note
                     ])
-                    st.toast("✅ Расход записан!")
+                    st.toast("✅ Расход зафиксирован!")
                     st.rerun()
 
 # ================= СТРАНИЦА 2: АНАЛИТИКА =================
-elif page == "📊 Аналитика бизнеса":
-    st.title("📊 P&L Отчет")
+elif page == "📈 Dashboard (P&L и KPI)":
+    st.title("📈 Бизнес-Аналитика")
     
-    if df_cash.empty:
-        st.info("В Google Таблице пока нет данных.")
+    if df_cash.empty or df_jobs.empty:
+        st.info("Недостаточно данных для аналитики.")
     else:
         df_cash['Date'] = pd.to_datetime(df_cash['Date'])
+        df_jobs['Date'] = pd.to_datetime(df_jobs['Date'])
+        
         df_cash['Month'] = df_cash['Date'].dt.to_period('M').astype(str)
+        df_jobs['Month'] = df_jobs['Date'].dt.to_period('M').astype(str)
         
-        selected_month = st.selectbox("Выбрать месяц", df_cash['Month'].unique()[::-1])
-        month_data = df_cash[df_cash['Month'] == selected_month]
+        selected_month = st.selectbox("Период (Месяц)", df_cash['Month'].unique()[::-1])
         
-        income = pd.to_numeric(month_data[month_data['Type'] == 'Income']['Amount']).sum()
-        expense = pd.to_numeric(month_data[month_data['Type'] == 'Expense']['Amount']).sum()
+        c_data = df_cash[df_cash['Month'] == selected_month]
+        j_data = df_jobs[df_jobs['Month'] == selected_month]
+        
+        # P&L Расчеты
+        c_data['Amount'] = pd.to_numeric(c_data['Amount'])
+        income = c_data[c_data['Type'] == 'Income']['Amount'].sum()
+        expense = c_data[c_data['Type'] == 'Expense']['Amount'].sum()
         profit = income - expense
+        margin = (profit / income * 100) if income > 0 else 0
         
+        # KPI Расчеты
+        total_orders = len(j_data)
+        avg_ticket = income / total_orders if total_orders > 0 else 0
+        j_data['HandymanUpsell'] = j_data['HandymanUpsell'].astype(str).str.upper() == 'TRUE'
+        handyman_upsell_rate = (j_data['HandymanUpsell'].sum() / total_orders * 100) if total_orders > 0 else 0
+        avg_rating = pd.to_numeric(j_data['Rating']).mean()
+
+        st.markdown("### 📊 P&L (Прибыли и Убытки)")
         with st.container(border=True):
-            st.metric("💵 Выручка", f"{income:,.0f} ₪")
-            st.metric("🔥 Расходы", f"{expense:,.0f} ₪")
-            st.metric("💎 Чистая прибыль", f"{profit:,.0f} ₪", 
-                      delta=f"{(profit/income*100):.1f}% маржа" if income>0 else "0")
-        
-        st.subheader("Куда ушли деньги?")
-        exp_data = month_data[month_data['Type'] == 'Expense']
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Выручка (Revenue)", f"{income:,.0f} ₪")
+            m2.metric("Расходы (Expenses)", f"{expense:,.0f} ₪")
+            m3.metric("Чистая прибыль", f"{profit:,.0f} ₪", delta=f"{margin:.1f}% Margin")
+            
+        st.markdown("### 🎯 Weekly / Monthly KPI")
+        with st.container(border=True):
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Заказов (Orders)", total_orders)
+            k2.metric("Средний чек", f"{avg_ticket:,.0f} ₪")
+            k3.metric("Handyman Upsell", f"{handyman_upsell_rate:.0f}%")
+            k4.metric("Avg Rating", f"⭐ {avg_rating:.1f}" if pd.notna(avg_rating) else "N/A")
+
+        st.markdown("### 📉 Структура расходов")
+        exp_data = c_data[c_data['Type'] == 'Expense']
         if not exp_data.empty:
             fig_exp = px.pie(exp_data, values='Amount', names='Category', hole=0.5)
             fig_exp.update_layout(margin=dict(t=0, b=0, l=0, r=0))
             st.plotly_chart(fig_exp, use_container_width=True)
 
 # ================= СТРАНИЦА 3: КАЛЬКУЛЯТОР =================
-elif page == "🧮 Калькулятор цен":
-    st.title("🧮 Калькулятор")
+elif page == "🧮 Smart Калькулятор":
+    st.title("🧮 Оценка стоимости")
+    st.markdown("Модель ценообразования: базовая ставка + модификаторы")
     
     with st.container(border=True):
-        st.subheader("Оценка стоимости")
         calc_sqm = st.number_input("Площадь (м²)", 0, 500, 100)
-        calc_type = st.radio("Тип уборки", ["Light (17 ₪/м²)", "Deep (24 ₪/м²)", "Post-Reno (30 ₪/м²)"])
+        calc_type = st.radio("Сложность (Task Menu)", ["Light (17 ₪/м²)", "Deep (24 ₪/м²)", "Post-Reno (30 ₪/м²)"], horizontal=True)
+        
+        st.markdown("#### Доп. задачи (Task Menu)")
+        c1, c2 = st.columns(2)
+        with c1:
+            add_oven = st.checkbox("Духовка / Холодильник (+150 ₪)")
+            add_windows = st.checkbox("Окна детально (+200 ₪)")
+        with c2:
+            add_mold = st.checkbox("Удаление плесени/извести (+100 ₪)")
+            add_balcony = st.checkbox("Сложный балкон (+100 ₪)")
         
         rate = 17 if "Light" in calc_type else 24 if "Deep" in calc_type else 30
         base_price = calc_sqm * rate
         
+        # Модификаторы
         big_fee = 200 if calc_sqm >= 140 else 0
+        task_menu_fee = (150 if add_oven else 0) + (200 if add_windows else 0) + (100 if add_mold else 0) + (100 if add_balcony else 0)
+        
+        total_quote = base_price + big_fee + task_menu_fee
+        
         if big_fee > 0:
-            st.warning(f"Надбавка за большую площадь (>=140м²): +{big_fee}₪")
+            st.warning(f"Применена надбавка за большую площадь (>=140м²): +{big_fee}₪")
+        if task_menu_fee > 0:
+            st.info(f"Доп. задачи по Task Menu: +{task_menu_fee}₪")
             
-        total_quote = base_price + big_fee
-        st.success(f"💰 Итоговая цена: {total_quote} ₪")
+        st.success(f"💰 Итоговая цена для клиента: {total_quote} ₪")
 
 # ================= СТРАНИЦА 4: БАЗА =================
 elif page == "📋 База заказов":
-    st.title("📋 История из Google Sheets")
+    st.title("📋 База данных (Google Sheets)")
     if df_jobs.empty:
         st.info("Заказов пока нет.")
     else:
-        st.dataframe(df_jobs[['Date', 'Property', 'Revenue', 'Rating']].sort_values(by="Date", ascending=False), use_container_width=True)
+        st.dataframe(df_jobs.sort_values(by="Date", ascending=False), use_container_width=True)
