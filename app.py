@@ -31,17 +31,20 @@ def load_data():
         try:
             cash_ws = sh.worksheet("Cashflow")
             jobs_ws = sh.worksheet("Jobs")
+            # Добавляем новый лист Salaries
+            salaries_ws = sh.worksheet("Salaries") 
             
             df_cash = pd.DataFrame(cash_ws.get_all_records())
             df_jobs = pd.DataFrame(jobs_ws.get_all_records())
+            df_salaries = pd.DataFrame(salaries_ws.get_all_records())
             
-            return df_cash, df_jobs, cash_ws, jobs_ws
+            return df_cash, df_jobs, df_salaries, cash_ws, jobs_ws, salaries_ws
         except Exception as e:
-            st.error("❌ Ошибка при чтении листов. Проверь, что в Google Таблице есть листы 'Cashflow' и 'Jobs'.")
+            st.error("❌ Ошибка при чтении листов. Проверь, что в Google Таблице есть листы 'Cashflow', 'Jobs' и 'Salaries'.")
             st.code(traceback.format_exc())
-    return pd.DataFrame(), pd.DataFrame(), None, None
+    return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None, None, None
 
-df_cash, df_jobs, cash_ws, jobs_ws = load_data()
+df_cash, df_jobs, df_salaries, cash_ws, jobs_ws, salaries_ws = load_data()
 
 # --- БОКОВОЕ МЕНЮ ---
 st.sidebar.title("Cleaning OS 💎")
@@ -49,7 +52,9 @@ page = st.sidebar.radio("Навигация:", [
     "💸 Касса (Операции)", 
     "📈 Dashboard (P&L и KPI)", 
     "🧮 Smart Калькулятор",
-    "📋 База заказов"
+    "📋 База заказов",
+    "👷 Выплата зарплат",  # Новая вкладка
+    "💳 Ведомость (Зарплаты)" # Новая вкладка
 ])
 
 # ================= СТРАНИЦА 1: КАССА =================
@@ -97,7 +102,7 @@ if page == "💸 Касса (Операции)":
                 exp_date = st.date_input("Дата", datetime.today())
                 exp_amount = st.number_input("Сумма (₪)", min_value=0.0, step=50.0)
                 
-                # Полный список расходов из бизнес-модели
+                # Из списка убрано "Payroll: Cleaning workers", теперь это делается через Калькулятор
                 exp_category = st.selectbox("Статья расходов", [
                     "Cleaning chemicals & consumables", 
                     "Travel / fuel / parking", 
@@ -107,7 +112,6 @@ if page == "💸 Касса (Операции)":
                     "Insurance", 
                     "Accountant / bookkeeping", 
                     "Phones / software", 
-                    "Payroll: Cleaning workers",
                     "Payroll: Handyman / construction",
                     "Payroll: Director salary",
                     "Other expenses"
@@ -217,3 +221,80 @@ elif page == "📋 База заказов":
         st.info("Заказов пока нет.")
     else:
         st.dataframe(df_jobs.sort_values(by="Date", ascending=False), use_container_width=True)
+
+# ================= СТРАНИЦА 5: ЗАРПЛАТЫ (ВВОД) =================
+elif page == "👷 Выплата зарплат":
+    st.title("👷 Калькулятор зарплат")
+    st.markdown("Здесь ты считаешь зарплату за смену и отправляешь её в базу расходов.")
+
+    if salaries_ws is None or cash_ws is None:
+        st.warning("Нет связи с таблицами Google Sheets.")
+    else:
+        with st.container(border=True):
+            sal_date = st.date_input("Дата работы", datetime.today())
+            worker_name = st.text_input("Имя работника")
+            hours_worked = st.number_input("Отработанно часов", min_value=0.0, step=0.5, value=8.0)
+            
+            # ТУТ ТЫ МОЖЕШЬ ИЗМЕНИТЬ СВОИ ТИПЫ РАБОТ И ИХ СТОИМОСТЬ В ЧАС
+            clean_type = st.selectbox("Тип уборки", ["Тип 1 (50 ₪/час)", "Тип 2 (60 ₪/час)", "Тип 3 (70 ₪/час)"])
+            
+            # Логика подсчета (измени цифры 50, 60, 70 на нужные тебе)
+            if "Тип 1" in clean_type:
+                hourly_rate = 50
+            elif "Тип 2" in clean_type:
+                hourly_rate = 60
+            else:
+                hourly_rate = 70
+                
+            calculated_salary = hours_worked * hourly_rate
+            st.success(f"💸 К выплате: **{calculated_salary} ₪**")
+            
+            if st.button("📤 Опубликовать в облако", type="primary", use_container_width=True):
+                if worker_name.strip() == "":
+                    st.error("Пожалуйста, введи имя работника.")
+                else:
+                    date_str = sal_date.strftime("%Y-%m-%d")
+                    # 1. Отправляем в базу Salaries (для истории и сумм)
+                    salaries_ws.append_row([
+                        date_str, worker_name, hours_worked, clean_type, calculated_salary
+                    ])
+                    # 2. Отправляем в Cashflow (чтобы отображалось в расходах и P&L)
+                    cash_ws.append_row([
+                        date_str, "Expense", "Payroll: Cleaning workers", calculated_salary, f"Зарплата: {worker_name} ({hours_worked}ч)"
+                    ])
+                    
+                    st.toast(f"✅ Зарплата для {worker_name} сохранена в базе и расходах!")
+                    st.rerun()
+
+# ================= СТРАНИЦА 6: ВЕДОМОСТЬ (ИСТОРИЯ) =================
+elif page == "💳 Ведомость (Зарплаты)":
+    st.title("💳 Зарплатная ведомость")
+    st.markdown("Сумма к выплате каждому работнику за определенный месяц.")
+
+    if df_salaries.empty:
+        st.info("В базе пока нет записей о зарплатах.")
+    else:
+        # Приводим дату к нужному формату для создания колонки "Месяц"
+        df_salaries['Date'] = pd.to_datetime(df_salaries['Date'])
+        df_salaries['Month'] = df_salaries['Date'].dt.to_period('M').astype(str)
+        df_salaries['Salary'] = pd.to_numeric(df_salaries['Salary'])
+        
+        # Получаем уникальные месяцы (сортируем от новых к старым)
+        available_months = df_salaries['Month'].unique()[::-1]
+        selected_month = st.selectbox("Выберите месяц:", available_months)
+        
+        # Фильтруем данные по выбранному месяцу
+        month_data = df_salaries[df_salaries['Month'] == selected_month]
+        
+        if month_data.empty:
+            st.warning("Нет данных за этот месяц.")
+        else:
+            # Делаем группировку (Суммируем все часы и зарплаты по каждому имени)
+            summary = month_data.groupby('Worker Name')[['Hours', 'Salary']].sum().reset_index()
+            summary.columns = ['Имя работника', 'Всего часов', 'Итого к выплате (₪)']
+            
+            st.markdown(f"### Итоги за {selected_month}")
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+            
+            total_pay = summary['Итого к выплате (₪)'].sum()
+            st.metric("Общий фонд оплаты труда за этот месяц", f"{total_pay:,.0f} ₪")
