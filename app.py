@@ -10,53 +10,58 @@ import traceback
 # --- НАСТРОЙКИ UI ---
 st.set_page_config(page_title="Cleaning OS Premium", page_icon="💎", layout="centered", initial_sidebar_state="collapsed")
 
-# --- ПОДКЛЮЧЕНИЕ ---
-def get_gsheet():
+# --- ПОДКЛЮЧЕНИЕ К GOOGLE (КЭШИРУЕМ, ЧТОБЫ НЕ ТРАТИТЬ ЛИМИТЫ) ---
+@st.cache_resource
+def get_worksheets():
     try:
         creds_dict = json.loads(st.secrets["google_json"])
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(st.secrets["spreadsheet"]["id"])
-        return sheet
+        
+        cash_ws = sheet.worksheet("Cashflow")
+        jobs_ws = sheet.worksheet("Jobs")
+        salaries_ws = sheet.worksheet("Salaries")
+        
+        return cash_ws, jobs_ws, salaries_ws
     except Exception as e:
         st.error("❌ Ошибка при подключении к Google:")
         st.code(traceback.format_exc())
-        return None
+        return None, None, None
 
-# --- ЗАГРУЗКА ДАННЫХ ---
-def load_data():
-    sh = get_gsheet()
-    if sh:
+# --- ЗАГРУЗКА ДАННЫХ (КЭШИРУЕМ САМИ ДАННЫЕ) ---
+@st.cache_data(ttl=600) # Данные хранятся в памяти 10 минут, пока не добавим новые
+def load_dataframes():
+    cash_ws, jobs_ws, salaries_ws = get_worksheets()
+    if cash_ws and jobs_ws and salaries_ws:
         try:
-            cash_ws = sh.worksheet("Cashflow")
-            jobs_ws = sh.worksheet("Jobs")
-            salaries_ws = sh.worksheet("Salaries") 
-            
             df_cash = pd.DataFrame(cash_ws.get_all_records())
             df_jobs = pd.DataFrame(jobs_ws.get_all_records())
             df_salaries = pd.DataFrame(salaries_ws.get_all_records())
-            
-            return df_cash, df_jobs, df_salaries, cash_ws, jobs_ws, salaries_ws
+            return df_cash, df_jobs, df_salaries
         except Exception as e:
-            st.error("❌ Ошибка при чтении листов. Проверь, что в Google Таблице есть листы 'Cashflow', 'Jobs' и 'Salaries'.")
+            st.error("❌ Ошибка при чтении данных.")
             st.code(traceback.format_exc())
-    return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None, None, None
+    return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-df_cash, df_jobs, df_salaries, cash_ws, jobs_ws, salaries_ws = load_data()
+# Получаем объекты для записи
+cash_ws, jobs_ws, salaries_ws = get_worksheets()
+# Получаем данные для аналитики
+df_cash, df_jobs, df_salaries = load_dataframes()
 
 # --- БОКОВОЕ МЕНЮ ---
 st.sidebar.title("Cleaning OS 💎")
 page = st.sidebar.radio("Навигация:", [
-    "🛒 Оформление заказа",  # Бывший калькулятор + Доход
-    "💸 Расходы",            # Бывшая касса (только траты)
+    "🛒 Оформление заказа", 
+    "💸 Расходы",            
     "📈 Dashboard (P&L и KPI)", 
     "📋 База заказов",
     "👷 Выплата зарплат",
     "💳 Ведомость (Зарплаты)"
 ])
 
-# ================= СТРАНИЦА 1: ОФОРМЛЕНИЕ ЗАКАЗА (КАЛЬКУЛЯТОР + ДОХОД) =================
+# ================= СТРАНИЦА 1: ОФОРМЛЕНИЕ ЗАКАЗА =================
 if page == "🛒 Оформление заказа":
     st.title("🛒 Оформление заказа")
     st.markdown("Здесь калькулятор автоматически считает стоимость уборки, и данные сразу идут в базу.")
@@ -69,7 +74,6 @@ if page == "🛒 Оформление заказа":
             job_date = st.date_input("Дата заказа", datetime.today())
             job_property = st.selectbox("Категория объекта", ["Apartments", "Villas", "Handyman / Construction"])
             
-            # Логика калькулятора
             calc_sqm = st.number_input("Площадь (м²)", 0, 1000, 100, step=10)
             calc_type = st.radio("Пакет (Сложность)", ["Light (17 ₪/м²)", "Deep (24 ₪/м²)", "Post-Reno (30 ₪/м²)"], horizontal=True)
             
@@ -82,7 +86,6 @@ if page == "🛒 Оформление заказа":
                 add_mold = st.checkbox("Удаление плесени/извести (+100 ₪)")
                 add_balcony = st.checkbox("Сложный балкон (+100 ₪)")
             
-            # Подсчет уборки
             rate = 17 if "Light" in calc_type else 24 if "Deep" in calc_type else 30
             base_price = calc_sqm * rate
             big_fee = 200 if calc_sqm >= 140 else 0
@@ -112,25 +115,23 @@ if page == "🛒 Оформление заказа":
             if st.button("🚀 Сохранить заказ в Облако", type="primary", use_container_width=True):
                 date_str = job_date.strftime("%Y-%m-%d")
                 
-                # 1. Запись в базу заказов (одной строкой)
                 jobs_ws.append_row([
                     date_str, job_property, calc_sqm, 
                     calc_type, is_handyman, total_quote, job_rating
                 ])
                 
-                # 2. Запись в Кассу - Выручка за уборку (если есть)
                 if cleaning_price > 0:
                     cash_ws.append_row([
                         date_str, "Income", "Cleaning revenue", cleaning_price, f"Уборка: {job_note}"
                     ])
                     
-                # 3. Запись в Кассу - Выручка Handyman (отдельной строкой!)
                 if is_handyman and handyman_price > 0:
                     cash_ws.append_row([
                         date_str, "Income", "Handyman revenue", handyman_price, f"Handyman: {job_note}"
                     ])
                     
                 st.toast("✅ Заказ успешно сохранен и разделен по доходам!")
+                load_dataframes.clear() # СБРАСЫВАЕМ КЭШ, ЧТОБЫ ДАШБОРД ОБНОВИЛСЯ
                 st.rerun()
 
 # ================= СТРАНИЦА 2: РАСХОДЫ =================
@@ -151,8 +152,8 @@ elif page == "💸 Расходы":
                 "Marketing / ads", 
                 "Insurance / Accountant", 
                 "Phones / software", 
-                "Handyman materials / tools",  # Добавлена категория для материалов Handyman
-                "Payroll: Handyman / construction", # Зарплата Handyman
+                "Handyman materials / tools",
+                "Payroll: Handyman / construction", 
                 "Payroll: Director salary",
                 "Other expenses"
             ])
@@ -164,6 +165,7 @@ elif page == "💸 Расходы":
                     exp_amount, exp_note
                 ])
                 st.toast("✅ Расход добавлен в базу!")
+                load_dataframes.clear() # СБРАСЫВАЕМ КЭШ
                 st.rerun()
 
 # ================= СТРАНИЦА 3: АНАЛИТИКА =================
@@ -193,12 +195,10 @@ elif page == "📈 Dashboard (P&L и KPI)":
             c_data = df_cash[df_cash['Month'] == selected_month] if not df_cash.empty else pd.DataFrame()
             j_data = df_jobs[df_jobs['Month'] == selected_month] if not df_jobs.empty else pd.DataFrame()
             
-            # P&L Расчеты
             income_clean, income_handy, expense = 0, 0, 0
             if not c_data.empty and 'Type' in c_data.columns and 'Amount' in c_data.columns:
                 c_data['Amount'] = pd.to_numeric(c_data['Amount'], errors='coerce').fillna(0)
                 
-                # Считаем доходы раздельно
                 income_clean = c_data[(c_data['Type'] == 'Income') & (c_data['Category'] == 'Cleaning revenue')]['Amount'].sum()
                 income_handy = c_data[(c_data['Type'] == 'Income') & (c_data['Category'] == 'Handyman revenue')]['Amount'].sum()
                 total_income = income_clean + income_handy
@@ -210,7 +210,6 @@ elif page == "📈 Dashboard (P&L и KPI)":
             profit = total_income - expense
             margin = (profit / total_income * 100) if total_income > 0 else 0
             
-            # KPI Расчеты
             total_orders = len(j_data) if not j_data.empty else 0
             avg_ticket = total_income / total_orders if total_orders > 0 else 0
             
@@ -227,7 +226,6 @@ elif page == "📈 Dashboard (P&L и KPI)":
                 m2.metric("Все расходы", f"{expense:,.0f} ₪")
                 m3.metric("Чистая прибыль", f"{profit:,.0f} ₪", delta=f"{margin:.1f}% Margin")
             
-            # Разделение доходов
             st.markdown("**Структура доходов:**")
             c1, c2 = st.columns(2)
             c1.info(f"🧹 Выручка Уборка: **{income_clean:,.0f} ₪**")
@@ -299,6 +297,7 @@ elif page == "👷 Выплата зарплат":
                     ])
                     
                     st.toast(f"✅ Зарплата для {worker_name} сохранена!")
+                    load_dataframes.clear() # СБРАСЫВАЕМ КЭШ
                     st.rerun()
 
 # ================= СТРАНИЦА 6: ВЕДОМОСТЬ (ИСТОРИЯ) =================
