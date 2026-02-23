@@ -31,7 +31,6 @@ def load_data():
         try:
             cash_ws = sh.worksheet("Cashflow")
             jobs_ws = sh.worksheet("Jobs")
-            # Добавляем новый лист Salaries
             salaries_ws = sh.worksheet("Salaries") 
             
             df_cash = pd.DataFrame(cash_ws.get_all_records())
@@ -53,8 +52,8 @@ page = st.sidebar.radio("Навигация:", [
     "📈 Dashboard (P&L и KPI)", 
     "🧮 Smart Калькулятор",
     "📋 База заказов",
-    "👷 Выплата зарплат",  # Новая вкладка
-    "💳 Ведомость (Зарплаты)" # Новая вкладка
+    "👷 Выплата зарплат",
+    "💳 Ведомость (Зарплаты)"
 ])
 
 # ================= СТРАНИЦА 1: КАССА =================
@@ -102,7 +101,6 @@ if page == "💸 Касса (Операции)":
                 exp_date = st.date_input("Дата", datetime.today())
                 exp_amount = st.number_input("Сумма (₪)", min_value=0.0, step=50.0)
                 
-                # Из списка убрано "Payroll: Cleaning workers", теперь это делается через Калькулятор
                 exp_category = st.selectbox("Статья расходов", [
                     "Cleaning chemicals & consumables", 
                     "Travel / fuel / parking", 
@@ -130,55 +128,76 @@ if page == "💸 Касса (Операции)":
 elif page == "📈 Dashboard (P&L и KPI)":
     st.title("📈 Бизнес-Аналитика")
     
-    if df_cash.empty or df_jobs.empty:
-        st.info("Недостаточно данных для аналитики.")
+    # Теперь аналитика работает, даже если заказов пока нет (но есть расходы)
+    if df_cash.empty and df_jobs.empty:
+        st.info("Нет данных для аналитики. Добавьте заказ или расход в Кассе.")
     else:
-        df_cash['Date'] = pd.to_datetime(df_cash['Date'])
-        df_jobs['Date'] = pd.to_datetime(df_jobs['Date'])
+        all_months = []
         
-        df_cash['Month'] = df_cash['Date'].dt.to_period('M').astype(str)
-        df_jobs['Month'] = df_jobs['Date'].dt.to_period('M').astype(str)
-        
-        selected_month = st.selectbox("Период (Месяц)", df_cash['Month'].unique()[::-1])
-        
-        c_data = df_cash[df_cash['Month'] == selected_month]
-        j_data = df_jobs[df_jobs['Month'] == selected_month]
-        
-        # P&L Расчеты
-        c_data['Amount'] = pd.to_numeric(c_data['Amount'])
-        income = c_data[c_data['Type'] == 'Income']['Amount'].sum()
-        expense = c_data[c_data['Type'] == 'Expense']['Amount'].sum()
-        profit = income - expense
-        margin = (profit / income * 100) if income > 0 else 0
-        
-        # KPI Расчеты
-        total_orders = len(j_data)
-        avg_ticket = income / total_orders if total_orders > 0 else 0
-        j_data['HandymanUpsell'] = j_data['HandymanUpsell'].astype(str).str.upper() == 'TRUE'
-        handyman_upsell_rate = (j_data['HandymanUpsell'].sum() / total_orders * 100) if total_orders > 0 else 0
-        avg_rating = pd.to_numeric(j_data['Rating']).mean()
-
-        st.markdown("### 📊 P&L (Прибыли и Убытки)")
-        with st.container(border=True):
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Выручка (Revenue)", f"{income:,.0f} ₪")
-            m2.metric("Расходы (Expenses)", f"{expense:,.0f} ₪")
-            m3.metric("Чистая прибыль", f"{profit:,.0f} ₪", delta=f"{margin:.1f}% Margin")
+        if not df_cash.empty:
+            df_cash['Date'] = pd.to_datetime(df_cash['Date'])
+            df_cash['Month'] = df_cash['Date'].dt.to_period('M').astype(str)
+            all_months.extend(df_cash['Month'].unique().tolist())
             
-        st.markdown("### 🎯 Weekly / Monthly KPI")
-        with st.container(border=True):
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Заказов (Orders)", total_orders)
-            k2.metric("Средний чек", f"{avg_ticket:,.0f} ₪")
-            k3.metric("Handyman Upsell", f"{handyman_upsell_rate:.0f}%")
-            k4.metric("Avg Rating", f"⭐ {avg_rating:.1f}" if pd.notna(avg_rating) else "N/A")
+        if not df_jobs.empty:
+            df_jobs['Date'] = pd.to_datetime(df_jobs['Date'])
+            df_jobs['Month'] = df_jobs['Date'].dt.to_period('M').astype(str)
+            all_months.extend(df_jobs['Month'].unique().tolist())
+            
+        unique_months = sorted(list(set(all_months)), reverse=True)
+        
+        if unique_months:
+            selected_month = st.selectbox("Период (Месяц)", unique_months)
+            
+            c_data = df_cash[df_cash['Month'] == selected_month] if not df_cash.empty else pd.DataFrame()
+            j_data = df_jobs[df_jobs['Month'] == selected_month] if not df_jobs.empty else pd.DataFrame()
+            
+            # P&L Расчеты
+            income, expense = 0, 0
+            if not c_data.empty and 'Type' in c_data.columns and 'Amount' in c_data.columns:
+                c_data['Amount'] = pd.to_numeric(c_data['Amount'])
+                income = c_data[c_data['Type'] == 'Income']['Amount'].sum()
+                expense = c_data[c_data['Type'] == 'Expense']['Amount'].sum()
+                
+            profit = income - expense
+            margin = (profit / income * 100) if income > 0 else 0
+            
+            # KPI Расчеты
+            total_orders = len(j_data) if not j_data.empty else 0
+            avg_ticket = income / total_orders if total_orders > 0 else 0
+            
+            handyman_upsell_rate, avg_rating = 0, float('nan')
+            if not j_data.empty and 'HandymanUpsell' in j_data.columns and 'Rating' in j_data.columns:
+                j_data['HandymanUpsell'] = j_data['HandymanUpsell'].astype(str).str.upper() == 'TRUE'
+                handyman_upsell_rate = (j_data['HandymanUpsell'].sum() / total_orders * 100) if total_orders > 0 else 0
+                avg_rating = pd.to_numeric(j_data['Rating']).mean()
 
-        st.markdown("### 📉 Структура расходов")
-        exp_data = c_data[c_data['Type'] == 'Expense']
-        if not exp_data.empty:
-            fig_exp = px.pie(exp_data, values='Amount', names='Category', hole=0.5)
-            fig_exp.update_layout(margin=dict(t=0, b=0, l=0, r=0))
-            st.plotly_chart(fig_exp, use_container_width=True)
+            st.markdown("### 📊 P&L (Прибыли и Убытки)")
+            with st.container(border=True):
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Выручка (Revenue)", f"{income:,.0f} ₪")
+                m2.metric("Расходы (Expenses)", f"{expense:,.0f} ₪")
+                m3.metric("Чистая прибыль", f"{profit:,.0f} ₪", delta=f"{margin:.1f}% Margin")
+                
+            st.markdown("### 🎯 Weekly / Monthly KPI")
+            with st.container(border=True):
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Заказов (Orders)", total_orders)
+                k2.metric("Средний чек", f"{avg_ticket:,.0f} ₪")
+                k3.metric("Handyman Upsell", f"{handyman_upsell_rate:.0f}%")
+                k4.metric("Avg Rating", f"⭐ {avg_rating:.1f}" if pd.notna(avg_rating) else "N/A")
+
+            st.markdown("### 📉 Структура расходов")
+            if not c_data.empty and 'Type' in c_data.columns:
+                exp_data = c_data[c_data['Type'] == 'Expense']
+                if not exp_data.empty:
+                    fig_exp = px.pie(exp_data, values='Amount', names='Category', hole=0.5)
+                    fig_exp.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+                    st.plotly_chart(fig_exp, use_container_width=True)
+                else:
+                    st.info("В этом месяце расходов еще нет.")
+            else:
+                st.info("В этом месяце расходов еще нет.")
 
 # ================= СТРАНИЦА 3: КАЛЬКУЛЯТОР =================
 elif page == "🧮 Smart Калькулятор":
@@ -201,7 +220,6 @@ elif page == "🧮 Smart Калькулятор":
         rate = 17 if "Light" in calc_type else 24 if "Deep" in calc_type else 30
         base_price = calc_sqm * rate
         
-        # Модификаторы
         big_fee = 200 if calc_sqm >= 140 else 0
         task_menu_fee = (150 if add_oven else 0) + (200 if add_windows else 0) + (100 if add_mold else 0) + (100 if add_balcony else 0)
         
@@ -235,10 +253,8 @@ elif page == "👷 Выплата зарплат":
             worker_name = st.text_input("Имя работника")
             hours_worked = st.number_input("Отработанно часов", min_value=0.0, step=0.5, value=8.0)
             
-            # ТУТ ТЫ МОЖЕШЬ ИЗМЕНИТЬ СВОИ ТИПЫ РАБОТ И ИХ СТОИМОСТЬ В ЧАС
             clean_type = st.selectbox("Тип уборки", ["Тип 1 (50 ₪/час)", "Тип 2 (60 ₪/час)", "Тип 3 (70 ₪/час)"])
             
-            # Логика подсчета (измени цифры 50, 60, 70 на нужные тебе)
             if "Тип 1" in clean_type:
                 hourly_rate = 50
             elif "Тип 2" in clean_type:
@@ -254,11 +270,9 @@ elif page == "👷 Выплата зарплат":
                     st.error("Пожалуйста, введи имя работника.")
                 else:
                     date_str = sal_date.strftime("%Y-%m-%d")
-                    # 1. Отправляем в базу Salaries (для истории и сумм)
                     salaries_ws.append_row([
                         date_str, worker_name, hours_worked, clean_type, calculated_salary
                     ])
-                    # 2. Отправляем в Cashflow (чтобы отображалось в расходах и P&L)
                     cash_ws.append_row([
                         date_str, "Expense", "Payroll: Cleaning workers", calculated_salary, f"Зарплата: {worker_name} ({hours_worked}ч)"
                     ])
@@ -274,22 +288,21 @@ elif page == "💳 Ведомость (Зарплаты)":
     if df_salaries.empty:
         st.info("В базе пока нет записей о зарплатах.")
     else:
-        # Приводим дату к нужному формату для создания колонки "Месяц"
         df_salaries['Date'] = pd.to_datetime(df_salaries['Date'])
         df_salaries['Month'] = df_salaries['Date'].dt.to_period('M').astype(str)
         df_salaries['Salary'] = pd.to_numeric(df_salaries['Salary'])
         
-        # Получаем уникальные месяцы (сортируем от новых к старым)
+        # МАГИЯ ЗДЕСЬ: Убираем случайные пробелы до/после имени и делаем первую букву заглавной
+        df_salaries['Worker Name'] = df_salaries['Worker Name'].astype(str).str.strip().str.title()
+        
         available_months = df_salaries['Month'].unique()[::-1]
         selected_month = st.selectbox("Выберите месяц:", available_months)
         
-        # Фильтруем данные по выбранному месяцу
         month_data = df_salaries[df_salaries['Month'] == selected_month]
         
         if month_data.empty:
             st.warning("Нет данных за этот месяц.")
         else:
-            # Делаем группировку (Суммируем все часы и зарплаты по каждому имени)
             summary = month_data.groupby('Worker Name')[['Hours', 'Salary']].sum().reset_index()
             summary.columns = ['Имя работника', 'Всего часов', 'Итого к выплате (₪)']
             
